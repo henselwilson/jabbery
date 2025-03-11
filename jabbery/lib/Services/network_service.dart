@@ -106,7 +106,7 @@ class NetworkService {
 
     sender.close();
 
-    return completer.future.timeout(Duration(seconds: 10), onTimeout: () {
+    return completer.future.timeout(Duration(seconds: 2), onTimeout: () {
       if (discoveredHosts.isNotEmpty) {
         String selectedHost = discoveredHosts.first;
         print("✅ [CLIENT] Selecting host: $selectedHost");

@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:udp/udp.dart';
+import 'package:flutter_sound/flutter_sound.dart';
 
 class LobbyScreen extends StatefulWidget {
   final bool isHost;
@@ -17,15 +19,25 @@ class _LobbyScreenState extends State<LobbyScreen> {
   // final VoiceService voiceService = VoiceService();
   List<String> connectedUsers = []; // Stores connected IPs
   UDP? udpSocket;
-  bool isTalking = false; // Indicator for push-to-talk
   static const int discoveryPort = 5000;
+  FlutterSoundRecorder? _audioRecorder;
+  FlutterSoundPlayer? _audioPlayer;
+  bool _isRecording = false;
+  String _myIpAddress = '';
+  bool _isStreaming = false; // For real-time streaming
+  StreamController<Uint8List>? _audioStreamController; // Added for streaming
+  Timer? _silenceTimer; // To detect end of stream on receiver
+  bool _isPlayerReady = false; // Track if player is ready for streaming
 
   @override
   void initState() {
     super.initState();
     // voiceService.init();
     // voiceService.targetIp = widget.hostIp;
-
+    getLocalIp();
+    _audioRecorder = FlutterSoundRecorder();
+    _audioPlayer = FlutterSoundPlayer();
+    _initAudio();
     if (widget.isHost) {
       _startReceivingRequests();
     } else {
@@ -33,10 +45,224 @@ class _LobbyScreenState extends State<LobbyScreen> {
     }
     _listenForUpdates();
     _listenForMessages();
+    _listenForAudio();
+    _listenForStreamedAudio(); // New listener for real-time audio
   }
 
+  Future<String?> getLocalIp() async {
+    print("MY IP ADDRESS $_myIpAddress");
+    for (var interface in await NetworkInterface.list()) {
+      for (var addr in interface.addresses) {
+        if (addr.type == InternetAddressType.IPv4 &&
+            addr.address.startsWith("192.168.")) {
+          setState(() {
+            _myIpAddress = addr.address;
+          });
+          print("MY IP ADDRESS $_myIpAddress");
+          return addr.address;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _initAudio() async {
+    await _audioRecorder!.openRecorder();
+    await _audioPlayer!.openPlayer();
+    await _startPlayerForStream(); // Initial setup
+  }
+
+  Future<void> _startPlayerForStream() async {
+    if (!_isPlayerReady) {
+      await _audioPlayer!.startPlayerFromStream(
+        codec: Codec.pcm16,
+        numChannels: 1,
+        sampleRate: 16000,
+      );
+      _isPlayerReady = true;
+      print("🎵 [CLIENT] Player initialized for streaming");
+    }
+  }
+  Future<void> _stopPlayerForStream() async {
+    if (_isPlayerReady) {
+      await _audioPlayer!.stopPlayer();
+      _isPlayerReady = false;
+      print("🛑 [CLIENT] Player stopped");
+    }
+  }
+// Updated Real-Time Streaming Methods
+  // Real-Time Streaming Methods
+  void _startStreaming() async {
+    if (_isStreaming || _isRecording) return;
+    setState(() => _isStreaming = true);
+
+    _audioStreamController = StreamController<Uint8List>();
+    _audioStreamController!.stream.listen(_sendStreamedAudio);
+
+    await _audioRecorder!.startRecorder(
+      codec: Codec.pcm16,
+      numChannels: 1,
+      sampleRate: 16000,
+      toStream: _audioStreamController!.sink,
+    );
+  }
+
+  void _stopStreaming() async {
+    if (!_isStreaming) return;
+    setState(() => _isStreaming = false);
+    await _audioRecorder!.stopRecorder();
+    await _audioStreamController?.close();
+
+    // Send stop signal
+    Uint8List stopSignal = Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]);
+    for (String ip in connectedUsers) {
+      if (ip != _myIpAddress) {
+        UDP sender = await UDP.bind(Endpoint.any());
+        await sender.send(stopSignal, Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
+        sender.close();
+      }
+    }
+
+    _audioStreamController = null;
+  }
+
+  void _sendStreamedAudio(Uint8List audioChunk) async {
+    if (audioChunk.isEmpty) return;
+
+    for (String ip in connectedUsers) {
+      if (ip != _myIpAddress) {
+        UDP sender = await UDP.bind(Endpoint.any());
+        await sender.send(audioChunk, Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
+        sender.close();
+      }
+    }
+  }
+
+  void _listenForStreamedAudio() async {
+    UDP receiver = await UDP.bind(Endpoint.any(port: Port(6006)));
+    print("🔄 [CLIENT] Listening for streamed audio on port 6006...");
+
+    receiver.asStream().listen((datagram) async {
+      if (datagram != null && datagram.data.isNotEmpty) {
+        Uint8List audioData = datagram.data;
+
+        // Check for stop signal
+        if (audioData.length == 4 &&
+            audioData[0] == 0xFF &&
+            audioData[1] == 0xFF &&
+            audioData[2] == 0xFF &&
+            audioData[3] == 0xFF) {
+          await _stopPlayerForStream();
+          _silenceTimer?.cancel();
+          return;
+        }
+
+        // Ensure player is ready before feeding data
+        await _startPlayerForStream();
+
+        // Reset silence timer
+        _silenceTimer?.cancel();
+        _silenceTimer = Timer(Duration(milliseconds: 500), () async {
+          await _stopPlayerForStream();
+          print("🔇 [CLIENT] No audio data received for 500ms, stopping player...");
+        });
+
+        // Feed audio data
+        try {
+          await _audioPlayer!.feedFromStream(audioData);
+        } catch (e) {
+          print("⚠️ [CLIENT] Error feeding audio stream: $e");
+        }
+      }
+    });
+  }
+
+  void _listenForAudio() async {
+    UDP receiver = await UDP.bind(Endpoint.any(port: Port(6005)));
+    print("🔄 [CLIENT] Listening for audio on port 6005...");
+
+    receiver.asStream().listen((datagram) async {
+      if (datagram != null && datagram.data.isNotEmpty) {
+        Uint8List audioData = datagram.data;
+        await _playAudio(audioData);
+      }
+    });
+  }
+
+  Future<void> _playAudio(Uint8List audioData) async {
+    String tempPath = '${Directory.systemTemp.path}/audio.aac';
+    await File(tempPath).writeAsBytes(audioData);
+    await _audioPlayer!.startPlayer(fromURI: tempPath, codec: Codec.aacADTS);
+  }
+
+  void _startRecording() async {
+    if (_isRecording) return;
+
+    setState(() {
+      _isRecording = true;
+    });
+
+    await _audioRecorder!
+        .startRecorder(toFile: 'audio.aac', codec: Codec.aacADTS);
+
+    _audioRecorder!.onProgress!.listen((RecordingDisposition disposition) {
+      // Handle recording progress if needed
+    });
+  }
+
+  void _stopRecording() async {
+    if (!_isRecording) return;
+
+    setState(() {
+      _isRecording = false;
+    });
+
+    String? path = await _audioRecorder!.stopRecorder();
+    if (path != null) {
+      Uint8List audioData = await File(path).readAsBytes();
+      _sendAudioData(audioData);
+    }
+  }
+
+  void _sendAudioData(Uint8List audioData) async {
+    for (String ip in connectedUsers) {
+      if (ip != _myIpAddress) {
+        // Skip your own IP
+        UDP sender = await UDP.bind(Endpoint.any());
+        await sender.send(
+            audioData, Endpoint.unicast(InternetAddress(ip), port: Port(6005)));
+        sender.close();
+      }
+    }
+  }
+
+  // void _listenForAudio() async {
+  //   UDP receiver = await UDP.bind(Endpoint.any(port: Port(6005)));
+  //   print("🔄 [CLIENT] Listening for audio on port 6005...");
+  //
+  //   receiver.asStream().listen((datagram) async {
+  //     if (datagram != null && datagram.data.isNotEmpty) {
+  //       Uint8List audioData = datagram.data;
+  //       await _playAudio(audioData);
+  //     }
+  //   });
+  // }
+  //
+  // Future<void> _playAudio(Uint8List audioData) async {
+  //   String tempPath = '${Directory.systemTemp.path}/audio.aac';
+  //   await File(tempPath).writeAsBytes(audioData);
+  //   await _audioPlayer!.startPlayer(fromURI: tempPath, codec: Codec.aacADTS);
+  // }
+
+  // Future<void> _playAudio(Uint8List audioData) async {
+  //   String tempPath = '${Directory.systemTemp.path}/audio.aac';
+  //   await File(tempPath).writeAsBytes(audioData);
+  //   await _audioPlayer!.startPlayer(fromURI: tempPath, codec: Codec.aacADTS);
+  // }
+
   void _startReceivingRequests() async {
-    udpSocket = await UDP.bind(Endpoint.any(port: Port(6002))); // Host listens on 6002
+    udpSocket =
+        await UDP.bind(Endpoint.any(port: Port(6002))); // Host listens on 6002
     print("🔵 [HOST] Listening for join requests on port 6002...");
 
     // Add the host itself to the list
@@ -54,15 +280,16 @@ class _LobbyScreenState extends State<LobbyScreen> {
         String userIp = datagram.address.address;
 
         if (message == "MotoVox_DISCOVER") {
-          print("📡 [HOST] Discovery request received from $userIp, responding...");
+          print(
+              "📡 [HOST] Discovery request received from $userIp, responding...");
 
           UDP sender = await UDP.bind(Endpoint.any());
-          await sender.send(hostIp.codeUnits, Endpoint.unicast(
-              InternetAddress(userIp), port: Port(discoveryPort)
-          ));
+          await sender.send(
+              hostIp.codeUnits,
+              Endpoint.unicast(InternetAddress(userIp),
+                  port: Port(discoveryPort)));
           sender.close();
-        }
-        else if (message == "JOIN") {
+        } else if (message == "JOIN") {
           print("✅ [HOST] Join request received from: $userIp");
 
           if (!connectedUsers.contains(userIp)) {
@@ -74,19 +301,17 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
           // ✅ Send confirmation to new client
           UDP sender = await UDP.bind(Endpoint.any());
-          await sender.send("JOINED".codeUnits, Endpoint.unicast(
-              InternetAddress(userIp), port: Port(6003)
-          ));
+          await sender.send("JOINED".codeUnits,
+              Endpoint.unicast(InternetAddress(userIp), port: Port(6003)));
           sender.close();
         }
       }
     });
   }
 
-
-
   void _sendJoinRequest() async {
-    print("📩 [CLIENT] Sending join request to: ${widget.hostIp}:6002"); // Debug log
+    print(
+        "📩 [CLIENT] Sending join request to: ${widget.hostIp}:6002"); // Debug log
 
     if (widget.hostIp.isEmpty) {
       print("❌ Invalid Host IP");
@@ -95,7 +320,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     UDP sender = await UDP.bind(Endpoint.any());
     for (int i = 0; i < 3; i++) {
-      await sender.send(Uint8List.fromList("JOIN".codeUnits), Endpoint.unicast(InternetAddress(widget.hostIp), port: Port(6002)));
+      await sender.send(Uint8List.fromList("JOIN".codeUnits),
+          Endpoint.unicast(InternetAddress(widget.hostIp), port: Port(6002)));
       await Future.delayed(Duration(milliseconds: 500));
     }
     sender.close();
@@ -112,11 +338,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     for (String ip in connectedUsers) {
       UDP sender = await UDP.bind(Endpoint.any());
-      await sender.send(data, Endpoint.unicast(InternetAddress(ip), port: Port(6003)));
+      await sender.send(
+          data, Endpoint.unicast(InternetAddress(ip), port: Port(6003)));
       sender.close();
     }
   }
-
 
   void _listenForUpdates() async {
     UDP receiver = await UDP.bind(Endpoint.any(port: Port(6003)));
@@ -126,12 +352,25 @@ class _LobbyScreenState extends State<LobbyScreen> {
       if (datagram != null && datagram.data.isNotEmpty) {
         String receivedData = String.fromCharCodes(datagram.data);
         List<String> updatedUsers = receivedData.split(',');
+        print("receivedData $receivedData");
 
-        print("🔄 [CLIENT] Received updated user list: $updatedUsers"); // Debug log
+        if (receivedData.contains(',') ||
+            RegExp(r'^(\d{1,3}\.){3}\d{1,3}$').hasMatch(receivedData)) {
+          List<String> updatedUsers = receivedData.split(',');
+          print("🔄 [CLIENT] Received updated user list: $updatedUsers");
 
-        setState(() {
-          connectedUsers = updatedUsers;
-        });
+          setState(() {
+            connectedUsers = updatedUsers;
+          });
+        }
+        // print(
+        //     "🔄 [CLIENT] Received updated user list: $updatedUsers"); // Debug log
+        //
+        // setState(() {
+        //   print("connectedUsers IP ADDRESS$connectedUsers");
+        //
+        //   connectedUsers = updatedUsers;
+        // });
 
         print("🔄 [CLIENT] State updated with: $connectedUsers");
       }
@@ -152,7 +391,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
     // Ensure message is sent to all users, including the host
     for (String ip in connectedUsers) {
       UDP sender = await UDP.bind(Endpoint.any());
-      await sender.send(data, Endpoint.unicast(InternetAddress(ip), port: Port(6004)));
+      await sender.send(
+          data, Endpoint.unicast(InternetAddress(ip), port: Port(6004)));
       sender.close();
     }
 
@@ -162,7 +402,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     messageController.clear();
   }
-
 
   void _listenForMessages() async {
     UDP receiver = await UDP.bind(Endpoint.any(port: Port(6004)));
@@ -179,40 +418,43 @@ class _LobbyScreenState extends State<LobbyScreen> {
       }
     });
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.isHost ? 'Host Lobby' : 'Joined Lobby')),
+      appBar:
+          AppBar(title: Text(widget.isHost ? 'Host Lobby' : 'Joined Lobby')),
       body: Column(
         children: [
           SizedBox(height: 10),
-          Text("Connected Users", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-
+          Text("Connected Users",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           connectedUsers.isEmpty
               ? Padding(
-            padding: EdgeInsets.all(8.0),
-            child: Text("No users connected yet", style: TextStyle(color: Colors.grey)),
-          )
+                  padding: EdgeInsets.all(8.0),
+                  child: Text("No users connected yet",
+                      style: TextStyle(color: Colors.grey)),
+                )
               : Column(
-            children: connectedUsers.map((ip) {
-              return Container(
-                margin: EdgeInsets.symmetric(vertical: 5, horizontal: 20),
-                padding: EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.blueAccent.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(10),
+                  children: connectedUsers.map((ip) {
+                    return Container(
+                      margin: EdgeInsets.symmetric(vertical: 5, horizontal: 20),
+                      padding: EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.blueAccent.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        ip == widget.hostIp ? "👑 Host: $ip" : "🔹 User: $ip",
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w500),
+                      ),
+                    );
+                  }).toList(),
                 ),
-                child: Text(
-                  ip == widget.hostIp ? "👑 Host: $ip" : "🔹 User: $ip",
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                ),
-              );
-            }).toList(),
-          ),
-
           SizedBox(height: 20),
-          Text("Chat Messages", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-
+          Text("Chat Messages",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           Expanded(
             child: Container(
               margin: EdgeInsets.all(10),
@@ -222,26 +464,28 @@ class _LobbyScreenState extends State<LobbyScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: messages.isEmpty
-                  ? Center(child: Text("No messages yet", style: TextStyle(color: Colors.grey)))
+                  ? Center(
+                      child: Text("No messages yet",
+                          style: TextStyle(color: Colors.grey)))
                   : ListView.builder(
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  return Container(
-                    margin: EdgeInsets.symmetric(vertical: 5),
-                    padding: EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: messages[index].startsWith("You:")
-                          ? Colors.green[100] // Sent message
-                          : Colors.white, // Received message
-                      borderRadius: BorderRadius.circular(10),
+                      itemCount: messages.length,
+                      itemBuilder: (context, index) {
+                        return Container(
+                          margin: EdgeInsets.symmetric(vertical: 5),
+                          padding: EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: messages[index].startsWith("You:")
+                                ? Colors.green[100] // Sent message
+                                : Colors.white, // Received message
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(messages[index],
+                              style: TextStyle(fontSize: 14)),
+                        );
+                      },
                     ),
-                    child: Text(messages[index], style: TextStyle(fontSize: 14)),
-                  );
-                },
-              ),
             ),
           ),
-
           Padding(
             padding: const EdgeInsets.all(10.0),
             child: Row(
@@ -251,7 +495,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
                     controller: messageController,
                     decoration: InputDecoration(
                       hintText: "Type a message...",
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
                 ),
@@ -263,6 +508,22 @@ class _LobbyScreenState extends State<LobbyScreen> {
               ],
             ),
           ),
+          Text("Voice Chat",
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ElevatedButton(
+                onPressed: _isRecording ? _stopRecording : _startRecording,
+                child: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
+              ),
+              SizedBox(width: 10),
+              ElevatedButton(
+                onPressed: _isStreaming ? _stopStreaming : _startStreaming,
+                child: Text(_isStreaming ? 'Stop Talking' : 'Push to Talk'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -271,6 +532,10 @@ class _LobbyScreenState extends State<LobbyScreen> {
   @override
   void dispose() {
     udpSocket?.close();
+    // _audioStreamController.close();
+
+    _audioRecorder!.closeRecorder();
+    _audioPlayer!.closePlayer();
     super.dispose();
   }
 }

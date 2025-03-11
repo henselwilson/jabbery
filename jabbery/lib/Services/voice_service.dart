@@ -5,13 +5,13 @@ import 'package:flutter_sound/flutter_sound.dart';
 import 'package:udp/udp.dart';
 
 class VoiceService {
-  static const int voicePort = 5000;
+  static const int voicePort = 6001;
   FlutterSoundRecorder? _recorder;
   FlutterSoundPlayer? _player;
   UDP? _udpSender;
   UDP? _udpReceiver;
   StreamSubscription? _udpSubscription;
-  String targetIp = ""; // Set this when joining a lobby
+  String targetIp = "192.168.39.48"; // Set this when joining a lobby
   bool isSpeaking = false;
 
   VoiceService() {

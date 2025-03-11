@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'Screens/HomePage.dart';
 import 'Screens/TurnOnHotspotScreen.dart';
 
-void main() {
+void main()async {
   runApp(const MyApp());
+  await Permission.microphone.request();
+
 }
 
 class MyApp extends StatelessWidget {
