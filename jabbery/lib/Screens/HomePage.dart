@@ -1,10 +1,13 @@
 import 'dart:ui';
-
 import 'package:flutter/material.dart';
+import 'package:jabbery/Model/User.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
 import '../Services/network_service.dart';
+import '../Model/Host.dart';
+
 import 'lobby_screen.dart';
+import 'ChooseLobbyScreen.dart';
 
 class HomeScreen extends StatelessWidget {
   final NetworkService networkService = NetworkService();
@@ -19,7 +22,7 @@ class HomeScreen extends StatelessWidget {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              Color(0xFF11E0DC), // MotoVox theme color
+              Color(0xFF11E0DC), // Jabbery theme color
               Color(0xFFFF6767), // Complementary gradient color
             ],
             begin: Alignment.topLeft,
@@ -32,7 +35,7 @@ class HomeScreen extends StatelessWidget {
             children: [
               const Spacer(),
 
-              // MotoVox Logo or Icon
+              // Jabbery Logo or Icon
               Icon(
                 LucideIcons.radio, // Use a walkie-talkie style icon
                 size: 100,
@@ -42,7 +45,7 @@ class HomeScreen extends StatelessWidget {
 
               // Title
               Text(
-                'Jabberry',
+                'Jabbery',
                 style: TextStyle(
                   fontSize: 36,
                   fontWeight: FontWeight.bold,
@@ -63,23 +66,12 @@ class HomeScreen extends StatelessWidget {
 
               const SizedBox(height: 40),
 
-              // Create Lobby Button
+              // Create Lobby Button (with Name Input)
               _buildButton(
                 context,
                 icon: LucideIcons.plusCircle,
                 label: 'Create Lobby',
-                onTap: () async {
-                  String hostIp = await networkService.startHosting();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => LobbyScreen(
-                        isHost: true,
-                        hostIp: hostIp,
-                      ),
-                    ),
-                  );
-                },
+                onTap: () => _showHostNameDialog(context),
               ),
 
               const SizedBox(height: 20),
@@ -92,18 +84,17 @@ class HomeScreen extends StatelessWidget {
                 onTap: () async {
                   _showLoadingDialog(context); // Show loading dialog
 
-                  String? hostAddress = await networkService.findHost();
+                  List<Host?> hostAddresses = await networkService.findHosts();
 
                   // Dismiss loading dialog
                   Navigator.pop(context);
 
-                  if (hostAddress != null) {
+                  if (hostAddresses.isNotEmpty) {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => LobbyScreen(
-                          isHost: false,
-                          hostIp: hostAddress,
+                        builder: (context) => ChooseLobbyScreen(
+                          availableHosts: hostAddresses,
                         ),
                       ),
                     );
@@ -116,7 +107,6 @@ class HomeScreen extends StatelessWidget {
                   }
                 },
               ),
-
 
               const Spacer(),
 
@@ -139,11 +129,12 @@ class HomeScreen extends StatelessWidget {
   }
 
   // Custom Button Widget
-  Widget _buildButton(BuildContext context, {
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
+  Widget _buildButton(
+      BuildContext context, {
+        required IconData icon,
+        required String label,
+        required VoidCallback onTap,
+      }) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
@@ -182,6 +173,51 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
+  // Show Host Name Dialog
+  void _showHostNameDialog(BuildContext context) {
+    TextEditingController nameController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Enter Host Name"),
+        content: TextField(
+          controller: nameController,
+          decoration: InputDecoration(hintText: "Your name"),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context), // Close dialog
+            child: Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              String hostName = nameController.text.trim();
+              if (hostName.isNotEmpty) {
+                Navigator.pop(context); // Close dialog
+
+                String hostIp = await networkService.startHosting();
+
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => LobbyScreen(
+                      isHost: true,
+                      host: Host(ipAddress: hostIp, hostName: hostName), // Pass host to LobbyScreen
+                      user: User(ipAddress: hostIp, userName: hostName),
+                    ),
+                  ),
+                );
+              }
+            },
+            child: Text("Start Lobby"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Show Loading Dialog
   void _showLoadingDialog(BuildContext context) {
     showDialog(
       context: context,
@@ -216,11 +252,6 @@ class HomeScreen extends StatelessWidget {
                     const CircularProgressIndicator(
                       color: Color(0xFF11E0DC),
                     ),
-                    const SizedBox(height: 16),
-                    // const Text(
-                    //   "Searching for lobbies...",
-                    //   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-                    // ),
                   ],
                 ),
               ),
@@ -230,5 +261,4 @@ class HomeScreen extends StatelessWidget {
       },
     );
   }
-
 }

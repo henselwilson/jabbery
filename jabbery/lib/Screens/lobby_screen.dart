@@ -5,11 +5,16 @@ import 'package:flutter/material.dart';
 import 'package:udp/udp.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 
+import '../Model/Host.dart';
+import '../Model/User.dart';
+
 class LobbyScreen extends StatefulWidget {
   final bool isHost;
-  final String hostIp; // Host's IP
+  final Host host;
+  final User user;
 
-  const LobbyScreen({required this.isHost, required this.hostIp});
+
+  const LobbyScreen({required this.isHost, required this.host, required this.user});
 
   @override
   _LobbyScreenState createState() => _LobbyScreenState();
@@ -17,7 +22,7 @@ class LobbyScreen extends StatefulWidget {
 
 class _LobbyScreenState extends State<LobbyScreen> {
   // final VoiceService voiceService = VoiceService();
-  List<String> connectedUsers = []; // Stores connected IPs
+  List<User> connectedUsers = []; // Stores connected IPs
   UDP? udpSocket;
   static const int discoveryPort = 5000;
   FlutterSoundRecorder? _audioRecorder;
@@ -117,11 +122,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     // Send stop signal
     Uint8List stopSignal = Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]);
-    for (String ip in connectedUsers) {
-      if (ip != _myIpAddress) {
+    for (User user in connectedUsers) {
+      if (user.ipAddress != _myIpAddress) {
         UDP sender = await UDP.bind(Endpoint.any());
         await sender.send(stopSignal,
-            Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
+            Endpoint.unicast(InternetAddress(user.ipAddress), port: Port(6006)));
         sender.close();
       }
     }
@@ -132,11 +137,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
   void _sendStreamedAudio(Uint8List audioChunk) async {
     if (audioChunk.isEmpty) return;
 
-    for (String ip in connectedUsers) {
-      if (ip != _myIpAddress) {
+    for (User user in connectedUsers) {
+      if (user.ipAddress != _myIpAddress) {
         UDP sender = await UDP.bind(Endpoint.any());
         await sender.send(audioChunk,
-            Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
+            Endpoint.unicast(InternetAddress(user.ipAddress), port: Port(6006)));
         sender.close();
       }
     }
@@ -230,12 +235,12 @@ class _LobbyScreenState extends State<LobbyScreen> {
   }
 
   void _sendAudioData(Uint8List audioData) async {
-    for (String ip in connectedUsers) {
-      if (ip != _myIpAddress) {
+    for (User user in connectedUsers) {
+      if (user.ipAddress != _myIpAddress) {
         // Skip your own IP
         UDP sender = await UDP.bind(Endpoint.any());
         await sender.send(
-            audioData, Endpoint.unicast(InternetAddress(ip), port: Port(6005)));
+            audioData, Endpoint.unicast(InternetAddress(user.ipAddress), port: Port(6005)));
         sender.close();
       }
     }
@@ -271,11 +276,10 @@ class _LobbyScreenState extends State<LobbyScreen> {
     print("🔵 [HOST] Listening for join requests on port 6002...");
 
     // Add the host itself to the list
-
-    String hostIp = widget.hostIp;
-    if (!connectedUsers.contains(hostIp)) {
+    String hostIp = widget.host.ipAddress;
+    if (!connectedUsersContains(hostIp)) {
       setState(() {
-        connectedUsers.add(hostIp);
+        connectedUsers.add(User(ipAddress: hostIp, userName: widget.host.hostName));
       });
     }
 
@@ -284,7 +288,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
         String message = String.fromCharCodes(datagram.data);
         String userIp = datagram.address.address;
 
-        if (message == "MotoVox_DISCOVER") {
+        if (message == "JABBERY_DISCOVER") {
           print(
               "📡 [HOST] Discovery request received from $userIp, responding...");
 
@@ -294,12 +298,12 @@ class _LobbyScreenState extends State<LobbyScreen> {
               Endpoint.unicast(InternetAddress(userIp),
                   port: Port(discoveryPort)));
           sender.close();
-        } else if (message == "JOIN") {
+        } else if (message.startsWith("JABBERY_JOIN")) {
           print("✅ [HOST] Join request received from: $userIp");
-
-          if (!connectedUsers.contains(userIp)) {
+          String userName = message.split("|")[2];
+          if (!connectedUsersContains(userIp)) {
             setState(() {
-              connectedUsers.add(userIp);
+              connectedUsers.add(User(ipAddress: userIp, userName: userName));
             });
           }
           _broadcastUserList();
@@ -316,35 +320,35 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
   void _sendJoinRequest() async {
     print(
-        "📩 [CLIENT] Sending join request to: ${widget.hostIp}:6002"); // Debug log
+        "📩 [CLIENT] Sending join request to: ${widget.host.ipAddress}:6002"); // Debug log
 
-    if (widget.hostIp.isEmpty) {
+    if (widget.host.ipAddress.isEmpty) {
       print("❌ Invalid Host IP");
       return;
     }
 
     UDP sender = await UDP.bind(Endpoint.any());
-    for (int i = 0; i < 3; i++) {
-      await sender.send(Uint8List.fromList("JOIN".codeUnits),
-          Endpoint.unicast(InternetAddress(widget.hostIp), port: Port(6002)));
+    while (connectedUsers.isEmpty) {
+      await sender.send(Uint8List.fromList("JABBERY_JOIN|$widget".codeUnits),
+          Endpoint.unicast(InternetAddress(widget.host.ipAddress), port: Port(6002)));
       await Future.delayed(Duration(milliseconds: 500));
     }
     sender.close();
-    print("📩 [CLIENT] Join request sent to ${widget.hostIp}");
+    print("📩 [CLIENT] Join request sent to ${widget.host.hostName} at ${widget.host.ipAddress}");
   }
 
   void _broadcastUserList() async {
     if (connectedUsers.isEmpty) return;
 
-    String userList = connectedUsers.join(',');
+    String userList = connectedUsers.join('|');
     Uint8List data = Uint8List.fromList(userList.codeUnits);
 
     print("📢 [HOST] Sending updated user list: $userList");
 
-    for (String ip in connectedUsers) {
+    for (User user in connectedUsers) {
       UDP sender = await UDP.bind(Endpoint.any());
       await sender.send(
-          data, Endpoint.unicast(InternetAddress(ip), port: Port(6003)));
+          data, Endpoint.unicast(InternetAddress(user.ipAddress), port: Port(6003)));
       sender.close();
     }
   }
@@ -356,31 +360,28 @@ class _LobbyScreenState extends State<LobbyScreen> {
     receiver.asStream().listen((datagram) {
       if (datagram != null && datagram.data.isNotEmpty) {
         String receivedData = String.fromCharCodes(datagram.data);
-        List<String> updatedUsers = receivedData.split(',');
         print("receivedData $receivedData");
 
-        if (receivedData.contains(',') ||
-            RegExp(r'^(\d{1,3}\.){3}\d{1,3}$').hasMatch(receivedData)) {
-          List<String> updatedUsers = receivedData.split(',');
-          print("🔄 [CLIENT] Received updated user list: $updatedUsers");
+        List<User> updatedUsers = [];
 
-          setState(() {
-            connectedUsers = updatedUsers;
-          });
+        List<String> dataParts = receivedData.split('|');
+
+        if (dataParts.length % 2 == 0) {
+          for (int i = 0; i < dataParts.length; i += 2) {
+            String ipAddress = dataParts[i];
+            String userName = dataParts[i + 1];
+            updatedUsers.add(User(ipAddress: ipAddress, userName: userName));
+          }
+        } else {
+          print("⚠️ [CLIENT] Malformed user list data: $receivedData");
         }
-        // print(
-        //     "🔄 [CLIENT] Received updated user list: $updatedUsers"); // Debug log
-        //
-        // setState(() {
-        //   print("connectedUsers IP ADDRESS$connectedUsers");
-        //
-        //   connectedUsers = updatedUsers;
-        // });
 
-        print("🔄 [CLIENT] State updated with: $connectedUsers");
+        print("🔄 [CLIENT] Received updated user list: $updatedUsers");
+
+        setState(() {
+          connectedUsers = updatedUsers;
+        });
       }
-    }, onError: (error) {
-      print("❌ [CLIENT] Error receiving user list updates: $error");
     });
   }
 
@@ -394,10 +395,10 @@ class _LobbyScreenState extends State<LobbyScreen> {
     print("📢 Sending message: $message");
 
     // Ensure message is sent to all users, including the host
-    for (String ip in connectedUsers) {
+    for (User user in connectedUsers) {
       UDP sender = await UDP.bind(Endpoint.any());
       await sender.send(
-          data, Endpoint.unicast(InternetAddress(ip), port: Port(6004)));
+          data, Endpoint.unicast(InternetAddress(user.ipAddress), port: Port(6004)));
       sender.close();
     }
 
@@ -457,9 +458,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
               )
             else
               Column(
-                children: connectedUsers.map((ip) {
-                  bool isHost = ip == widget.hostIp;
-                  bool isMe = ip == _myIpAddress;
+                children: connectedUsers.map((user) {
+                  String userIp = user.ipAddress;
+                  String userName = user.userName;
+                  bool isHost = userIp == widget.host.ipAddress;
+                  bool isMe = userIp == _myIpAddress;
 
                   String displayText;
                   if (isHost && isMe) {
@@ -492,7 +495,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
                         ),
                         SizedBox(width: 8),
                         Text(
-                          "$displayText: $ip",
+                          "$displayText: $userName",
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w500,
@@ -653,5 +656,14 @@ class _LobbyScreenState extends State<LobbyScreen> {
     _audioRecorder!.closeRecorder();
     _audioPlayer!.closePlayer();
     super.dispose();
+  }
+
+  bool connectedUsersContains(String ip) {
+    for (User user in connectedUsers) {
+      if (user.ipAddress == ip) {
+        return true;
+      }
+    }
+    return false;
   }
 }

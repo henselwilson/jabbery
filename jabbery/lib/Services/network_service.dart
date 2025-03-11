@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:udp/udp.dart';
+import '../Model/Host.dart';
 
 class NetworkService {
   static const int discoveryPort = 5000;
@@ -21,7 +22,7 @@ class NetworkService {
     print("🔹 Broadcasting on port: $discoveryPort");
 
     Timer.periodic(Duration(seconds: 2), (timer) async {
-      String response = "MotoVox_RESPONSE|$localIp"; // ✅ Include host IP
+      String response = "JABBERY_HOST|$localIp"; // ✅ Include host IP
       int sentBytes = await _udpSender!.send(
         response.codeUnits,
         Endpoint.broadcast(port: Port(discoveryPort)), // ✅ Explicit broadcast
@@ -30,36 +31,36 @@ class NetworkService {
           "✅ [HOST] Sent $sentBytes bytes to 192.168.39.255:$discoveryPort with message: $response");
     });
 
-    _udpReceiver!.asStream().listen((datagram) {
-      if (datagram == null || datagram.data.isEmpty) {
-        print("⚠️ [HOST] Received empty or null datagram, ignoring...");
-        return;
-      }
-
-      String message = String.fromCharCodes(datagram.data); // ✅ Now safe
-      String senderIp = datagram.address.address; // ✅ Extract sender IP safely
-
-      print("📩 [HOST] Received: $message from $senderIp");
-
-      if (message == "MotoVox_DISCOVER") {
-        print("📡 [HOST] Responding to discovery request...");
-        String response = "MotoVox_RESPONSE|$localIp";
-        _udpSender!.send(
-            response.codeUnits,
-            Endpoint.unicast(InternetAddress(senderIp),
-                port: Port(discoveryPort)));
-      }
-    });
+    // _udpReceiver!.asStream().listen((datagram) {
+    //   if (datagram == null || datagram.data.isEmpty) {
+    //     print("⚠️ [HOST] Received empty or null datagram, ignoring...");
+    //     return;
+    //   }
+    //
+    //   String message = String.fromCharCodes(datagram.data); // ✅ Now safe
+    //   String senderIp = datagram.address.address; // ✅ Extract sender IP safely
+    //
+    //   print("📩 [HOST] Received: $message from $senderIp");
+    //
+    //   if (message == "JABBERY_DISCOVER") {
+    //     print("📡 [HOST] Responding to discovery request...");
+    //     String response = "JABBERY_HOST|$localIp";
+    //     _udpSender!.send(
+    //         response.codeUnits,
+    //         Endpoint.unicast(InternetAddress(senderIp),
+    //             port: Port(discoveryPort)));
+    //   }
+    // });
     return localIp;
   }
 
-  Future<String?> findHost() async {
+  Future<List<Host?>> findHosts() async {
+    bool listenForHosts = true;
     _udpReceiver = await UDP.bind(Endpoint.any(port: Port(discoveryPort)));
 
     print("🔍 [CLIENT] Listening for lobbies on port $discoveryPort...");
 
-    Completer<String?> completer = Completer<String?>();
-    Set<String> discoveredHosts = {}; // Store multiple hosts
+    Set<Host> discoveredHosts = {}; // Store multiple hosts
 
     // ✅ Get client’s own local IP
     String? myIp = await getLocalIp();
@@ -69,10 +70,9 @@ class NetworkService {
     String? broadcastIp = await getBroadcastAddress();
     if (broadcastIp == null) {
       print("❌ [CLIENT] Could not determine broadcast address");
-      return null;
+      return [];
     }
-    print(
-        "📢 [CLIENT] Sending discovery requests to $broadcastIp:$discoveryPort");
+    print("📢 [CLIENT] Sending discovery requests to $broadcastIp:$discoveryPort");
 
     _udpSubscription = _udpReceiver!.asStream().listen((datagram) {
       if (datagram != null) {
@@ -86,36 +86,43 @@ class NetworkService {
 
         print("✅ [CLIENT] Received: $message from $senderIp");
 
-        if (message.startsWith("MotoVox_RESPONSE|")) {
+        if (message.startsWith("JABBERY_HOST|")) {
           String hostIp = message.split("|")[1];
-          discoveredHosts.add(hostIp);
+          String hostName = message.split("|")[2];
+          Host host = Host(ipAddress: hostIp,hostName: hostName);
+          discoveredHosts.add(host);
+          listenForHosts = true;
         }
       }
     });
 
+    int maxTries=3;
+    int attempt=1;
     // ✅ Send multiple discovery requests for better reliability
-    UDP sender = await UDP.bind(Endpoint.any());
-
-    for (int i = 0; i < 5; i++) {
-      // Retry 5 times
-      int sentBytes = await sender.send("MotoVox_DISCOVER".codeUnits,
-          Endpoint.broadcast(port: Port(discoveryPort)));
-      print("📢 [CLIENT] Sent $sentBytes bytes to $broadcastIp:$discoveryPort");
-      await Future.delayed(Duration(seconds: 2)); // Wait before retrying
+    // UDP sender = await UDP.bind(Endpoint.any());
+    while (discoveredHosts.isEmpty || listenForHosts || attempt>maxTries) {
+      print("Listening for Hosts");
+      listenForHosts = false;
+      // int sentBytes = await sender.send(
+      //   "JABBERY_DISCOVER".codeUnits,
+      //   Endpoint.broadcast(port: Port(discoveryPort)),
+      // );
+      // print("📢 [CLIENT] Sent $sentBytes bytes to $broadcastIp:$discoveryPort");
+      await Future.delayed(Duration(seconds: 5)); // Wait before retrying
     }
 
-    sender.close();
+    // sender.close();
 
-    return completer.future.timeout(Duration(seconds: 2), onTimeout: () {
-      if (discoveredHosts.isNotEmpty) {
-        String selectedHost = discoveredHosts.first;
-        print("✅ [CLIENT] Selecting host: $selectedHost");
-        return selectedHost;
-      }
-      print("❌ No lobby found within timeout.");
-      return null;
-    });
+    // ✅ Return the list of discovered hosts
+    if (discoveredHosts.isNotEmpty) {
+      print("✅ [CLIENT] Returning List of hosts: $discoveredHosts");
+      return discoveredHosts.toList();
+    }
+
+    print("❌ No lobby found within timeout.");
+    return [];
   }
+
 
   Future<String?> getBroadcastAddress() async {
     for (var interface in await NetworkInterface.list()) {
