@@ -83,6 +83,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
       print("🎵 [CLIENT] Player initialized for streaming");
     }
   }
+
   Future<void> _stopPlayerForStream() async {
     if (_isPlayerReady) {
       await _audioPlayer!.stopPlayer();
@@ -90,6 +91,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
       print("🛑 [CLIENT] Player stopped");
     }
   }
+
 // Updated Real-Time Streaming Methods
   // Real-Time Streaming Methods
   void _startStreaming() async {
@@ -118,7 +120,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
     for (String ip in connectedUsers) {
       if (ip != _myIpAddress) {
         UDP sender = await UDP.bind(Endpoint.any());
-        await sender.send(stopSignal, Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
+        await sender.send(stopSignal,
+            Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
         sender.close();
       }
     }
@@ -132,7 +135,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
     for (String ip in connectedUsers) {
       if (ip != _myIpAddress) {
         UDP sender = await UDP.bind(Endpoint.any());
-        await sender.send(audioChunk, Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
+        await sender.send(audioChunk,
+            Endpoint.unicast(InternetAddress(ip), port: Port(6006)));
         sender.close();
       }
     }
@@ -162,9 +166,10 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
         // Reset silence timer
         _silenceTimer?.cancel();
-        _silenceTimer = Timer(Duration(milliseconds: 500), () async {
+        _silenceTimer = Timer(Duration(milliseconds: 100), () async {
           await _stopPlayerForStream();
-          print("🔇 [CLIENT] No audio data received for 500ms, stopping player...");
+          print(
+              "🔇 [CLIENT] No audio data received for 500ms, stopping player...");
         });
 
         // Feed audio data
@@ -422,109 +427,220 @@ class _LobbyScreenState extends State<LobbyScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar:
-          AppBar(title: Text(widget.isHost ? 'Host Lobby' : 'Joined Lobby')),
-      body: Column(
-        children: [
-          SizedBox(height: 10),
-          Text("Connected Users",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          connectedUsers.isEmpty
-              ? Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Text("No users connected yet",
-                      style: TextStyle(color: Colors.grey)),
-                )
-              : Column(
-                  children: connectedUsers.map((ip) {
-                    return Container(
-                      margin: EdgeInsets.symmetric(vertical: 5, horizontal: 20),
-                      padding: EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.blueAccent.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        ip == widget.hostIp ? "👑 Host: $ip" : "🔹 User: $ip",
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w500),
-                      ),
-                    );
-                  }).toList(),
-                ),
-          SizedBox(height: 20),
-          Text("Chat Messages",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          Expanded(
-            child: Container(
-              margin: EdgeInsets.all(10),
-              padding: EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.grey[200],
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: messages.isEmpty
-                  ? Center(
-                      child: Text("No messages yet",
-                          style: TextStyle(color: Colors.grey)))
-                  : ListView.builder(
-                      itemCount: messages.length,
-                      itemBuilder: (context, index) {
-                        return Container(
-                          margin: EdgeInsets.symmetric(vertical: 5),
-                          padding: EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: messages[index].startsWith("You:")
-                                ? Colors.green[100] // Sent message
-                                : Colors.white, // Received message
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(messages[index],
-                              style: TextStyle(fontSize: 14)),
-                        );
-                      },
-                    ),
-            ),
+      // resizeToAvoidBottomInset :false,
+      extendBodyBehindAppBar: true,
+      // appBar: AppBar(title: Text(''), automaticallyImplyLeading: false),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFFFF6767), Color(0xFF11E0DC)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-          Padding(
-            padding: const EdgeInsets.all(10.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: messageController,
-                    decoration: InputDecoration(
-                      hintText: "Type a message...",
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
+        ),
+        child: Column(
+          children: [
+            SizedBox(height: kToolbarHeight),
+            Text("Connected Users",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            if (connectedUsers.isEmpty)
+              Padding(
+                padding: EdgeInsets.all(8.0),
+                child: Text(
+                  "No users connected yet",
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
-                SizedBox(width: 10),
-                ElevatedButton(
-                  onPressed: () => _sendMessage(messageController.text),
-                  child: Text("Send"),
+              )
+            else
+              Column(
+                children: connectedUsers.map((ip) {
+                  bool isHost = ip == widget.hostIp;
+                  bool isMe = ip == _myIpAddress;
+
+                  String displayText;
+                  if (isHost && isMe) {
+                    displayText = "You";
+                  } else if (isHost) {
+                    displayText = "Host";
+                  } else if (isMe) {
+                    displayText = "You";
+                  } else {
+                    displayText = "User";
+                  }
+
+                  return Container(
+                    margin: EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.grey.shade300,
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isHost ? Icons.cell_tower	 : Icons.person,
+                          color: isHost ? Colors.blueGrey : Colors.blueGrey,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          "$displayText: $ip",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+
+              ),
+
+            // SizedBox(height: 0),
+            // Text("Chat Messages",
+            //     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Expanded(
+              child: Container(
+                margin: EdgeInsets.all(10),
+                padding: EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.grey[200],
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: messages.isEmpty
+                    ? Center(
+                        child: Text("No messages yet",
+                            style: TextStyle(color: Colors.grey)))
+                    : ListView.builder(
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) {
+                          return Container(
+                            margin: EdgeInsets.symmetric(vertical: 5),
+                            padding: EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: messages[index].startsWith("You:")
+                                  ? Colors.green[100] // Sent message
+                                  : Colors.white, // Received message
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(messages[index],
+                                style: TextStyle(fontSize: 14)),
+                          );
+                        },
+                      ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 8,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: messageController,
+                        decoration: InputDecoration(
+                          hintText: "Type a message...",
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 14),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => _sendMessage(messageController.text),
+                      icon: Icon(Icons.send, color: Colors.blueAccent),
+                      splashRadius: 24,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Text(
+                  "Voice Message",
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.black87,
+                  ),
+                ),
+                SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Recording Button
+                    IconButton(
+                      onPressed:
+                          _isRecording ? _stopRecording : _startRecording,
+                      icon: Icon(
+                        _isRecording ? Icons.stop_circle : Icons.mic,
+                        size: 36,
+                        color:
+                            _isRecording ? Colors.redAccent : Colors.blueAccent,
+                      ),
+                      tooltip:
+                          _isRecording ? 'Stop Recording' : 'Start Recording',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.grey[200],
+                        padding: EdgeInsets.all(12),
+                        shape: CircleBorder(),
+                        shadowColor: Colors.black.withOpacity(0.2),
+                        elevation: 4,
+                      ),
+                    ),
+                    SizedBox(width: 16),
+                    // Push-to-Talk Button
+                    IconButton(
+                      onPressed:
+                          _isStreaming ? _stopStreaming : _startStreaming,
+                      icon: Icon(
+                        _isStreaming ? Icons.cancel : Icons.record_voice_over,
+                        size: 36,
+                        color: _isStreaming
+                            ? Colors.orangeAccent
+                            : Colors.greenAccent,
+                      ),
+                      tooltip: _isStreaming ? 'Stop Talking' : 'Push to Talk',
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.grey[200],
+                        padding: EdgeInsets.all(12),
+                        shape: CircleBorder(),
+                        shadowColor: Colors.black.withOpacity(0.2),
+                        elevation: 4,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-          ),
-          Text("Voice Chat",
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ElevatedButton(
-                onPressed: _isRecording ? _stopRecording : _startRecording,
-                child: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-              ),
-              SizedBox(width: 10),
-              ElevatedButton(
-                onPressed: _isStreaming ? _stopStreaming : _startStreaming,
-                child: Text(_isStreaming ? 'Stop Talking' : 'Push to Talk'),
-              ),
-            ],
-          ),
-        ],
+
+            SizedBox(height: kToolbarHeight),
+          ],
+        ),
       ),
     );
   }
