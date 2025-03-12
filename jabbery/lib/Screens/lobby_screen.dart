@@ -340,11 +340,13 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
   void _broadcastUserList() async {
     if (connectedUsers.isEmpty) return;
+    String resultString = "";
+    for(User user in connectedUsers){
+      resultString=resultString+user.userName+"|"+user.ipAddress+"\n";
+    }
+    Uint8List data = Uint8List.fromList(resultString.codeUnits);
 
-    String userList = connectedUsers.join('|');
-    Uint8List data = Uint8List.fromList(userList.codeUnits);
-
-    print("📢 [HOST] Sending updated user list: $userList");
+    print("📢 [HOST] Sending updated user list: $resultString");
 
     for (User user in connectedUsers) {
       UDP sender = await UDP.bind(Endpoint.any());
@@ -365,16 +367,11 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
         List<User> updatedUsers = [];
 
-        List<String> dataParts = receivedData.split('|');
+        List<String> dataParts = receivedData.split('\n');
 
-        if (dataParts.length % 2 == 0) {
-          for (int i = 0; i < dataParts.length; i += 2) {
-            String ipAddress = dataParts[i];
-            String userName = dataParts[i + 1];
-            updatedUsers.add(User(ipAddress: ipAddress, userName: userName));
-          }
-        } else {
-          print("⚠️ [CLIENT] Malformed user list data: $receivedData");
+        for (String userString in dataParts){
+          List<String> userVals = userString.split("|");
+          updatedUsers.add(User(ipAddress: userVals[1], userName: userVals[0]));
         }
 
         print("🔄 [CLIENT] Received updated user list: $updatedUsers");
