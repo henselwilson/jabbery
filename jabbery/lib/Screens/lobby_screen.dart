@@ -307,12 +307,6 @@ class _LobbyScreenState extends State<LobbyScreen> {
             });
           }
           _broadcastUserList();
-
-          // ✅ Send confirmation to new client
-          UDP sender = await UDP.bind(Endpoint.any());
-          await sender.send("JOINED".codeUnits,
-              Endpoint.unicast(InternetAddress(userIp), port: Port(6003)));
-          sender.close();
         }
       }
     });
@@ -339,20 +333,23 @@ class _LobbyScreenState extends State<LobbyScreen> {
   }
 
   void _broadcastUserList() async {
-    if (connectedUsers.isEmpty) return;
-    String resultString = "";
-    for(User user in connectedUsers){
-      resultString=resultString+user.userName+"|"+user.ipAddress+"\n";
-    }
-    Uint8List data = Uint8List.fromList(resultString.codeUnits);
+    for(int i=0; i<3 ; i++) {
+      String resultString = "";
+      for (User user in connectedUsers) {
+        resultString =
+            resultString + user.userName + "|" + user.ipAddress + "\n";
+      }
+      Uint8List data = Uint8List.fromList(resultString.codeUnits);
 
-    print("📢 [HOST] Sending updated user list: $resultString");
+      print("📢 [HOST] Sending updated user list: $resultString");
 
-    for (User user in connectedUsers) {
-      UDP sender = await UDP.bind(Endpoint.any());
-      await sender.send(
-          data, Endpoint.unicast(InternetAddress(user.ipAddress), port: Port(6003)));
-      sender.close();
+      for (User user in connectedUsers) {
+        UDP sender = await UDP.bind(Endpoint.any());
+        await sender.send(
+            data, Endpoint.unicast(
+            InternetAddress(user.ipAddress), port: Port(6003)));
+        sender.close();
+      }
     }
   }
 
