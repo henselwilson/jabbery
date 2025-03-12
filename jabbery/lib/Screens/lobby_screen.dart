@@ -300,7 +300,7 @@ class _LobbyScreenState extends State<LobbyScreen> {
           sender.close();
         } else if (message.startsWith("JABBERY_JOIN")) {
           print("✅ [HOST] Join request received from: $userIp");
-          String userName = message.split("|")[2];
+          String userName = message.split("|")[1];
           if (!connectedUsersContains(userIp)) {
             setState(() {
               connectedUsers.add(User(ipAddress: userIp, userName: userName));
@@ -329,7 +329,8 @@ class _LobbyScreenState extends State<LobbyScreen> {
 
     UDP sender = await UDP.bind(Endpoint.any());
     while (connectedUsers.isEmpty) {
-      await sender.send(Uint8List.fromList("JABBERY_JOIN|$widget".codeUnits),
+      String username = widget.user.userName;
+      await sender.send(Uint8List.fromList("JABBERY_JOIN|$username".codeUnits),
           Endpoint.unicast(InternetAddress(widget.host.ipAddress), port: Port(6002)));
       await Future.delayed(Duration(milliseconds: 500));
     }
