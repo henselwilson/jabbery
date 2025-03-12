@@ -196,7 +196,7 @@ class HomeScreen extends StatelessWidget {
               if (hostName.isNotEmpty) {
                 Navigator.pop(context); // Close dialog
 
-                String hostIp = await networkService.startHosting();
+                String hostIp = await networkService.startHosting(hostName);
 
                 Navigator.push(
                   context,

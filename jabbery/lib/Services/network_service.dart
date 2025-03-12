@@ -9,7 +9,7 @@ class NetworkService {
   UDP? _udpReceiver;
   StreamSubscription? _udpSubscription;
 
-  Future<String> startHosting() async {
+  Future<String> startHosting(String hostName) async {
     _udpSender = await UDP.bind(Endpoint.any());
     _udpReceiver = await UDP.bind(Endpoint.any(port: Port(discoveryPort)));
 
@@ -22,7 +22,7 @@ class NetworkService {
     print("🔹 Broadcasting on port: $discoveryPort");
 
     Timer.periodic(Duration(seconds: 2), (timer) async {
-      String response = "JABBERY_HOST|$localIp"; // ✅ Include host IP
+      String response = "JABBERY_HOST|$hostName"; // ✅ Include host IP
       int sentBytes = await _udpSender!.send(
         response.codeUnits,
         Endpoint.broadcast(port: Port(discoveryPort)), // ✅ Explicit broadcast
@@ -60,7 +60,7 @@ class NetworkService {
 
     print("🔍 [CLIENT] Listening for lobbies on port $discoveryPort...");
 
-    Set<Host> discoveredHosts = {}; // Store multiple hosts
+    List<Host> discoveredHosts = []; // Store multiple hosts
 
     // ✅ Get client’s own local IP
     String? myIp = await getLocalIp();
@@ -87,10 +87,11 @@ class NetworkService {
         print("✅ [CLIENT] Received: $message from $senderIp");
 
         if (message.startsWith("JABBERY_HOST|")) {
-          String hostIp = message.split("|")[1];
-          String hostName = message.split("|")[2];
-          Host host = Host(ipAddress: hostIp,hostName: hostName);
-          discoveredHosts.add(host);
+          String hostName = message.split("|")[1];
+          Host host = Host(ipAddress: senderIp,hostName: hostName);
+          if(!discoveredHostsContainsIp(discoveredHosts, senderIp)) {
+            discoveredHosts.add(host);
+          }
           listenForHosts = true;
         }
       }
@@ -100,9 +101,13 @@ class NetworkService {
     int attempt=1;
     // ✅ Send multiple discovery requests for better reliability
     // UDP sender = await UDP.bind(Endpoint.any());
-    while (discoveredHosts.isEmpty || listenForHosts || attempt>maxTries) {
+    while (discoveredHosts.isEmpty && attempt<maxTries) {
+      if(discoveredHosts.length>3){
+        break;
+      }
       print("Listening for Hosts");
       listenForHosts = false;
+      attempt++;
       // int sentBytes = await sender.send(
       //   "JABBERY_DISCOVER".codeUnits,
       //   Endpoint.broadcast(port: Port(discoveryPort)),
@@ -162,5 +167,14 @@ class NetworkService {
     _udpSender?.close();
     _udpReceiver?.close();
     _udpSubscription?.cancel();
+  }
+
+  bool discoveredHostsContainsIp(List<Host> discoveredHosts, String senderIp) {
+    for (Host host in discoveredHosts) {
+      if (host.ipAddress == senderIp) {
+        return true;
+      }
+    }
+    return false;
   }
 }
